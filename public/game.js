@@ -44,6 +44,10 @@ socket.on('renderUI', (uiState) => {
             if (btnConfig.color === 'green') btn.style.backgroundColor = '#2ecc71';
             if (btnConfig.color === 'blue') btn.style.backgroundColor = '#3498db';
             if (btnConfig.color === 'purple') btn.style.backgroundColor = '#9b59b6';
+                        // --- NOUVEAU : GESTION DE LA TAILLE ---
+            if (btnConfig.size === 'giant') {
+                btn.className = 'big-centered-btn'; // On applique le style CSS
+            }
 
             // État activé/désactivé
             btn.disabled = btnConfig.disabled;
@@ -63,12 +67,17 @@ socket.on('renderUI', (uiState) => {
 
 // --- GESTION SIMPLE DES POPUPS ---
 socket.on('modal', (data) => {
+    // Si le serveur demande de fermer la modale
+    if (data.close) {
+        modal.style.display = 'none';
+        return;
+    }
+
     document.getElementById('modal-title').innerText = data.title || "INFO";
     document.getElementById('modal-text').innerText = data.message;
     const btn = document.getElementById('btn-modal-action');
     btn.innerText = data.btnText || "OK";
     
-    // Si le serveur demande de recharger la page (fin de jeu)
     if (data.reload) {
         btn.onclick = () => location.reload();
     } else {

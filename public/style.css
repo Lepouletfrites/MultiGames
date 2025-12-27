@@ -1,137 +1,184 @@
-/* public/style.css */
-body {
-    font-family: 'Courier New', monospace;
-    background-color: #1a1a1a;
-    color: #eee;
-    text-align: center;
+/* --- RESET & BASE --- */
+* {
+    box-sizing: border-box;
     margin: 0;
-    padding: 20px;
+    padding: 0;
+    font-family: 'Poppins', sans-serif; /* La police moderne */
+    user-select: none; /* Empêche de sélectionner le texte sur mobile */
+    -webkit-tap-highlight-color: transparent; /* Enlève le flash bleu au clic */
+}
+
+body {
+    background-color: #121212; /* Fond très sombre (pas noir total) */
+    background-image: radial-gradient(circle at 50% 50%, #1e1e2e 0%, #121212 100%);
+    color: #ffffff;
     display: flex;
     flex-direction: column;
     align-items: center;
+    min-height: 100vh;
+    padding: 20px;
 }
 
-h1 { color: #f1c40f; text-shadow: 2px 2px #000; }
+/* --- TITRES --- */
+h1 {
+    font-weight: 900;
+    font-size: 2rem;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    margin-bottom: 10px;
+    background: linear-gradient(45deg, #00f260, #0575e6); /* Dégradé de texte */
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    text-align: center;
+}
 
-/* Les cartes des joueurs */
+h3 {
+    font-weight: 400;
+    color: #a0a0a0;
+    margin-bottom: 30px;
+    text-align: center;
+    font-size: 0.9rem;
+}
+
+/* --- CARTES JOUEURS (Glassmorphism) --- */
 .stats-container {
-    display: flex;
-    justify-content: space-around;
     width: 100%;
-    max-width: 600px;
-    margin-bottom: 20px;
+    max-width: 400px;
+    display: flex;
+    justify-content: space-between;
+    gap: 15px;
+    margin-bottom: 30px;
 }
 
 .player-card {
-    background: #333;
+    flex: 1;
+    background: rgba(255, 255, 255, 0.05); /* Transparence */
+    backdrop-filter: blur(10px); /* Effet de flou derrière */
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 16px;
     padding: 15px;
-    border-radius: 10px;
-    width: 45%;
-    box-shadow: 0 4px 6px rgba(0,0,0,0.3);
-}
-
-.big-text { font-size: 1.8rem; font-weight: bold; display: block; margin: 5px 0;}
-
-/* Zone de contrôle */
-.controls {
-    display: grid;
-    grid-template-columns: 1fr 1fr 1fr;
-    gap: 15px;
-    width: 100%;
-    max-width: 600px;
-}
-
-button {
-    padding: 20px 0;
-    font-size: 1.1rem;
-    font-weight: bold;
-    border: none;
-    border-radius: 8px;
-    cursor: pointer;
-    color: white;
-    transition: transform 0.1s;
-    box-shadow: 0 4px 0 rgba(0,0,0,0.4);
-}
-
-button:active { transform: translateY(4px); box-shadow: none; }
-button:disabled { opacity: 0.4; cursor: not-allowed; transform: none; box-shadow: none;}
-
-#btn-charge { background-color: #27ae60; }
-#btn-shoot { background-color: #c0392b; }
-#btn-block { background-color: #2980b9; }
-
-/* --- LA MODALE (POP-UP) --- */
-.modal {
-    display: none; /* Caché par défaut */
-    position: fixed;
-    z-index: 100;
-    left: 0;
-    top: 0;
-    width: 100%;
-    height: 100%;
-    background-color: rgba(0, 0, 0, 0.8); /* Fond noir transparent */
-    align-items: center;
-    justify-content: center;
-}
-
-.modal-content {
-    background-color: #2c3e50;
-    padding: 30px;
-    border-radius: 15px;
-    border: 2px solid #f1c40f;
     text-align: center;
-    width: 80%;
-    max-width: 400px;
-    animation: popIn 0.3s ease-out;
+    box-shadow: 0 4px 15px rgba(0,0,0,0.3);
 }
 
-.modal-result { font-size: 1.2rem; margin-bottom: 20px; line-height: 1.5; }
-
-#btn-close-modal {
-    background-color: #f1c40f;
-    color: #222;
-    padding: 10px 30px;
-    margin-top: 10px;
+.big-text {
+    font-size: 1.5rem;
+    font-weight: 700;
+    margin-top: 5px;
 }
 
-@keyframes popIn {
-    from { transform: scale(0.5); opacity: 0; }
-    to { transform: scale(1); opacity: 1; }
-}
 /* --- BARRES DE VIE --- */
 .hp-container {
-    background: #555;
+    background: #2c2c2c;
     width: 100%;
-    height: 20px;
-    border-radius: 10px;
+    height: 12px;
+    border-radius: 6px;
     margin: 10px 0;
-    overflow: hidden; /* Important pour que la barre reste dans le cadre */
-    border: 2px solid #222;
+    overflow: hidden;
 }
 
 .hp-bar {
     height: 100%;
-    background: #e74c3c; /* Rouge */
-    width: 100%; /* Plein par défaut */
-    transition: width 0.3s ease-out; /* Animation fluide */
+    background: linear-gradient(90deg, #ff416c, #ff4b2b); /* Dégradé rouge */
+    width: 100%;
+    transition: width 0.3s ease-out;
+    border-radius: 6px;
+    box-shadow: 0 0 10px rgba(255, 75, 43, 0.5); /* Lueur */
 }
 
-/* --- ANIMATION DE SECOUSSE (Quand on prend des dégâts) --- */
-@keyframes shake {
-    0% { transform: translate(1px, 1px) rotate(0deg); }
-    10% { transform: translate(-1px, -2px) rotate(-1deg); }
-    20% { transform: translate(-3px, 0px) rotate(1deg); }
-    30% { transform: translate(3px, 2px) rotate(0deg); }
-    40% { transform: translate(1px, -1px) rotate(1deg); }
-    50% { transform: translate(-1px, 2px) rotate(-1deg); }
-    60% { transform: translate(-3px, 1px) rotate(0deg); }
-    70% { transform: translate(3px, 1px) rotate(-1deg); }
-    80% { transform: translate(-1px, -1px) rotate(1deg); }
-    90% { transform: translate(1px, 2px) rotate(0deg); }
-    100% { transform: translate(1px, -2px) rotate(-1deg); }
+/* --- BOUTONS NORMAUX --- */
+.controls {
+    display: grid;
+    grid-template-columns: 1fr 1fr; /* 2 colonnes */
+    gap: 15px;
+    width: 100%;
+    max-width: 400px;
 }
 
+button {
+    border: none;
+    padding: 20px;
+    border-radius: 16px;
+    font-size: 1rem;
+    font-weight: 700;
+    color: white;
+    cursor: pointer;
+    transition: transform 0.1s, filter 0.2s;
+    box-shadow: 0 4px 0 rgba(0,0,0,0.2); /* Effet 3D subtil */
+    text-transform: uppercase;
+}
+
+button:active {
+    transform: translateY(4px); /* S'enfonce au clic */
+    box-shadow: none;
+}
+
+button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    filter: grayscale(100%);
+}
+
+/* --- LE GROS BOUTON COWBOY (ORBE LUMINEUSE) --- */
+.big-centered-btn {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    
+    width: 280px;
+    height: 280px;
+    border-radius: 50%;
+    
+    border: 8px solid rgba(255,255,255,0.1);
+    font-size: 2.5rem;
+    
+    z-index: 1000;
+    box-shadow: 0 0 50px rgba(0,0,0,0.5);
+    transition: transform 0.1s;
+}
+
+.big-centered-btn:active {
+    transform: translate(-50%, -50%) scale(0.95);
+}
+
+/* --- MODALE --- */
+.modal {
+    display: none;
+    position: fixed;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    background: rgba(0,0,0,0.85); /* Fond très foncé */
+    backdrop-filter: blur(5px);
+    justify-content: center;
+    align-items: center;
+    z-index: 9999 !important;
+}
+
+.modal-content {
+    background: #1e1e2e;
+    padding: 40px;
+    border-radius: 24px;
+    text-align: center;
+    border: 1px solid rgba(255,255,255,0.1);
+    box-shadow: 0 20px 50px rgba(0,0,0,0.5);
+    max-width: 80%;
+}
+
+.modal-result {
+    font-size: 1.2rem;
+    margin: 20px 0;
+    white-space: pre-line; /* Permet les sauts de ligne */
+}
+
+/* --- ANIMATION --- */
 .shake-animation {
-    animation: shake 0.5s;
-    border: 2px solid red; 
+    animation: shake 0.5s cubic-bezier(.36,.07,.19,.97) both;
+}
+
+@keyframes shake {
+    10%, 90% { transform: translate3d(-1px, 0, 0); }
+    20%, 80% { transform: translate3d(2px, 0, 0); }
+    30%, 50%, 70% { transform: translate3d(-4px, 0, 0); }
+    40%, 60% { transform: translate3d(4px, 0, 0); }
 }
