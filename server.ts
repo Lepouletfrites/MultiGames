@@ -4,17 +4,17 @@ import { Server, Socket } from 'socket.io';
 import path from 'path';
 import os from 'os';
 
-// Imports
 import { GameInstance } from './games/GameInterface';
-import { Session } from './games/Session'; // Important : On importe Session
+import { Session } from './games/Session';
+import { Lobby } from './games/Lobby';
 
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
+const PORT = process.env.PORT || 3000;
 
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Utilitaire IP
 function getLocalIp() {
   const interfaces = os.networkInterfaces();
   for (const name of Object.keys(interfaces)) {
@@ -25,55 +25,95 @@ function getLocalIp() {
   return 'localhost';
 }
 
-// Stockage des parties (Sessions)
 const runningGames = new Map<string, GameInstance>();
-let waitingPlayer: Socket | null = null;
+const lobby = new Lobby(io);
 
 io.on('connection', (socket) => {
-  socket.emit('serverInfo', { ip: getLocalIp(), port: 3000 });
+  const pseudo = socket.handshake.auth.name || "Anonyme";
+  socket.data.username = pseudo;
+  socket.data.currentRoomId = null; 
 
-  // --- MATCHMAKING ---
-  if (waitingPlayer) {
-    const opponent = waitingPlayer;
-    waitingPlayer = null;
+  console.log(`[+] ${pseudo} est en ligne`);
+  socket.emit('serverInfo', { ip: getLocalIp(), port: PORT });
+  
+  lobby.addPlayer(socket);
 
-    const roomId = Math.random().toString(36).substring(7);
-    socket.join(roomId);
-    opponent.join(roomId);
-
-    console.log(`Session lancée dans la room ${roomId}`);
-
-    // ON LANCE LA SESSION (Hub)
-    const session = new Session(io, roomId, socket.id, opponent.id);
-    runningGames.set(roomId, session);
-    session.start();
-
-  } else {
-    waitingPlayer = socket;
-    socket.emit('renderUI', { 
-        title: "MULTIJEUX ARCADE", 
-        status: "En attente d'un adversaire...",
-        displays: [],
-        buttons: [] 
-    });
-  }
-
-  // --- ROUTEUR D'ACTIONS ---
   socket.on('gameAction', (actionId: string) => {
-    const roomId = Array.from(socket.rooms).find(r => r !== socket.id);
-    if (!roomId) return;
+    if (actionId.startsWith('LOBBY_')) {
+        handleLobbyAction(socket, actionId);
+        return;
+    }
 
-    const game = runningGames.get(roomId);
-    if (game) {
-      game.handleAction(socket.id, actionId);
+    const roomId = socket.data.currentRoomId;
+    if (roomId) {
+      const game = runningGames.get(roomId);
+      if (game) game.handleAction(socket.id, actionId);
     }
   });
 
-  // --- DÉCONNEXION ---
-  socket.on('disconnect', () => {
-    if (waitingPlayer === socket) waitingPlayer = null;
+  function handleLobbyAction(socket: Socket, actionId: string) {
+      if (actionId === 'LOBBY_CREATE') {
+          lobby.createRoom(socket.id);
+          socket.join(socket.id);
+          socket.data.currentRoomId = socket.id;
+      }
+      else if (actionId === 'LOBBY_CANCEL') {
+          lobby.removePlayer(socket.id);
+          socket.data.currentRoomId = null;
+          lobby.addPlayer(socket);
+      }
+      else if (actionId.startsWith('LOBBY_JOIN_')) {
+          const targetRoomId = actionId.replace('LOBBY_JOIN_', '');
+          const room = lobby.getRoom(targetRoomId);
 
-    const roomId = Array.from(socket.rooms).find(r => r !== socket.id);
+          if (room) {
+              const p1Id = room.hostId;
+              const p2Id = socket.id;
+
+              lobby.removePlayer(p1Id);
+              lobby.removePlayer(p2Id);
+
+              const s1 = io.sockets.sockets.get(p1Id);
+              const s2 = io.sockets.sockets.get(p2Id);
+
+              if (s1 && s2) {
+                  s1.join(targetRoomId);
+                  s1.data.currentRoomId = targetRoomId;
+                  s2.join(targetRoomId);
+                  s2.data.currentRoomId = targetRoomId;
+
+                  const session = new Session(io, targetRoomId, p1Id, p2Id);
+                  runningGames.set(targetRoomId, session);
+                  
+                  session.start((winner) => {
+                      console.log(`[SERVEUR] Fermeture de la session ${targetRoomId}`);
+                      runningGames.delete(targetRoomId);
+
+                      // --- LOGIQUE DE SORTIE CORRIGÉE ---
+                      [p1Id, p2Id].forEach(pid => {
+                          const s = io.sockets.sockets.get(pid);
+                          if (s) {
+                              // IMPORTANT : On ne quitte la room QUE si ce n'est pas notre propre ID
+                              if (s.id !== targetRoomId) {
+                                  s.leave(targetRoomId);
+                              }
+                              s.data.currentRoomId = null;
+                              lobby.addPlayer(s); // Le lobby va envoyer le renderUI
+                          }
+                      });
+                  });
+              }
+          } else {
+              lobby.addPlayer(socket);
+          }
+      }
+  }
+
+  socket.on('disconnect', () => {
+    const pseudo = socket.data.username;
+    console.log(`[-] ${pseudo} est parti`);
+    lobby.removePlayer(socket.id);
+    const roomId = socket.data.currentRoomId;
     if (roomId) {
       const game = runningGames.get(roomId);
       if (game) {
@@ -84,10 +124,6 @@ io.on('connection', (socket) => {
   });
 });
 
-server.listen(3000, () => {
-  const ip = getLocalIp();
-  console.log('---------------------------------');
-  console.log(`🚀 SERVEUR SESSION LANCÉ !`);
-  console.log(`🏠 http://${ip}:3000`);
-  console.log('---------------------------------');
+server.listen(PORT, () => {
+  console.log(`🚀 SERVEUR PRÊT : http://${getLocalIp()}:${PORT}`);
 });

@@ -8,6 +8,15 @@
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
+    <div id="login-screen" style="position:fixed; top:0; left:0; width:100%; height:100%; background:#121212; z-index:2000; display:flex; flex-direction:column; justify-content:center; align-items:center; padding:20px;">
+        <h1 style="margin-bottom:40px;">QUI ES-TU ?</h1>
+        <input type="text" id="username-input" placeholder="Ton Pseudo..." maxlength="12" 
+               style="padding:15px; border-radius:12px; border:none; font-size:1.2rem; text-align:center; width:100%; max-width:300px; margin-bottom:20px; background:#2c2c2c; color:white;">
+        
+        <button onclick="login()" style="background:#00f260; color:#000; width:100%; max-width:300px;">
+            C'EST PARTI ! 🚀
+        </button>
+    </div>
 
     <h1 id="game-title">En attente...</h1>
 
