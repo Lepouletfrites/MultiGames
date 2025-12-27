@@ -182,3 +182,32 @@ button:disabled {
     30%, 50%, 70% { transform: translate3d(-4px, 0, 0); }
     40%, 60% { transform: translate3d(4px, 0, 0); }
 }
+/* Bouton Quitter discret en haut à droite */
+.quit-game-btn {
+    position: fixed;
+    top: 15px;
+    right: 15px;
+    width: 32px;
+    height: 32px;
+    background: rgba(255, 255, 255, 0.1); /* Très discret */
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 50%;
+    color: white;
+    font-size: 14px; /* Taille du drapeau */
+    display: none; /* Caché par défaut */
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    z-index: 1500; /* Sous le login-screen (2000) mais au-dessus du jeu */
+    transition: all 0.2s;
+    padding: 0;
+}
+
+.quit-game-btn:active {
+    background: rgba(231, 76, 60, 0.6);
+    transform: scale(0.9);
+}
+/* Cache le titre et le statut par défaut pour éviter le texte "En attente..." au flash */
+#game-title, #game-status {
+    min-height: 1.5em;
+}

@@ -12,4 +12,6 @@ export interface GameInstance {
     start(onEnd: OnGameEndCallback): void;
     handleAction(playerId: string, actionId: string): void;
     handleDisconnect(playerId: string): void;
+    refresh(playerId: string): void;
+    updatePlayerSocket(oldId: string, newId: string): void;
 }

@@ -8,11 +8,13 @@ export class CowboyGame implements GameInstance {
     private p2: string;
     private onEnd: OnGameEndCallback | null = null;
 
-    // État du jeu
+    // --- ÉTATS DE SYNCHRONISATION ---
+    private readyStatus: { [key: string]: boolean } = {};
+    private gameStarted: boolean = false;
+
+    // --- ÉTAT DU JEU ---
     private gameState: 'WAITING' | 'GO' | 'ROUND_OVER' = 'WAITING';
     private timer: NodeJS.Timeout | null = null;
-
-    // NOUVEAU : Scores de la partie
     private scores: { [key: string]: number } = {};
 
     constructor(io: Server, roomId: string, p1Id: string, p2Id: string) {
@@ -20,26 +22,61 @@ export class CowboyGame implements GameInstance {
         this.roomId = roomId;
         this.p1 = p1Id;
         this.p2 = p2Id;
-        // Initialisation des scores à 0
         this.scores[p1Id] = 0;
         this.scores[p2Id] = 0;
+
+        this.readyStatus[p1Id] = false;
+        this.readyStatus[p2Id] = false;
     }
 
     start(onEnd: OnGameEndCallback) {
         this.onEnd = onEnd;
-        this.startNewRound();
+        this.updateUI(); // Affiche l'écran des règles
     }
 
-    // Lance une nouvelle manche
+    handleAction(playerId: string, actionId: string) {
+        if (actionId === 'QUIT_GAME') {
+        if (this.timer) clearTimeout(this.timer); // STOPPE LE SERVEUR
+        const winner = (playerId === this.p1) ? this.p2 : this.p1;
+        this.io.to(this.roomId).emit('modal', { title: "ABANDON", message: "Duel annulé", btnText: "OK" });
+        if (this.onEnd) this.onEnd(winner);
+        return;
+    }
+        // --- GESTION DU READY ---
+        if (actionId === 'READY_PLAYER') {
+            this.readyStatus[playerId] = true;
+            this.updateUI();
+
+            if (this.readyStatus[this.p1] && this.readyStatus[this.p2]) {
+                setTimeout(() => {
+                    this.gameStarted = true;
+                    this.startNewRound(); // Le premier chrono aléatoire ne part qu'ici
+                }, 800);
+            }
+            return;
+        }
+
+        if (!this.gameStarted || this.gameState === 'ROUND_OVER') return;
+
+        // Logique de tir
+        if (actionId === 'SHOOT') {
+            if (this.gameState === 'WAITING') {
+                const loser = playerId;
+                const winner = (loser === this.p1) ? this.p2 : this.p1;
+                this.handleRoundWin(winner, "Faux départ ! 🚫");
+            } 
+            else if (this.gameState === 'GO') {
+                this.handleRoundWin(playerId, "Tir réussi ! 🎯");
+            }
+        }
+    }
+
     private startNewRound() {
         this.gameState = 'WAITING';
-        
-        // 1. On affiche "PRÉPAREZ-VOUS..." avec le gros bouton Orange
-        this.broadcastUI("PRÉPAREZ-VOUS...", "orange", "ATTENDEZ ! ✋");
+        this.updateUI();
 
-        // 2. Timer aléatoire (2 à 6 secondes)
+        // Timer aléatoire (2 à 6 secondes)
         const randomTime = Math.floor(Math.random() * 4000) + 2000;
-
         this.timer = setTimeout(() => {
             this.triggerSignal();
         }, randomTime);
@@ -47,108 +84,122 @@ export class CowboyGame implements GameInstance {
 
     private triggerSignal() {
         if (this.gameState !== 'WAITING') return;
-        
         this.gameState = 'GO';
-        // BOUTON VERT et TEXTE QUI CHANGE
-        this.broadcastUI("TIREZ !!!", "green", "PAN ! 🔥");
+        this.updateUI();
     }
 
-    handleAction(playerId: string, actionId: string) {
-        // Si la manche est déjà finie, on ignore les clics
-        if (this.gameState === 'ROUND_OVER') return;
-
-        // CAS 1 : FAUX DÉPART (Trop tôt)
-        if (this.gameState === 'WAITING') {
-            const loser = playerId;
-            const winner = (loser === this.p1) ? this.p2 : this.p1;
-            this.handleRoundWin(winner, "Faux départ ! 🚫");
-        } 
-        // CAS 2 : TIR VALIDE (Le premier qui clique)
-        else if (this.gameState === 'GO') {
-            this.handleRoundWin(playerId, "Tir réussi ! 🎯");
-        }
-    }
-
-        private handleRoundWin(winnerId: string, reason: string) {
+    private handleRoundWin(winnerId: string, reason: string) {
         this.gameState = 'ROUND_OVER';
         if (this.timer) clearTimeout(this.timer);
 
         this.scores[winnerId]++;
+        this.updateUI();
 
-        // 1. NETTOYAGE : On envoie une interface SANS boutons pour que l'écran soit propre
-        // Cela efface le gros bouton orange/vert pendant qu'on lit le résultat
-        const uiClean: UIState = {
-            title: `🤠 MANCHE ${this.scores[this.p1] + this.scores[this.p2]} TERMINEE`,
-            status: "Résultats...",
-            displays: [
-                { type: 'text', label: "SCORE J1", value: this.scores[this.p1].toString() },
-                { type: 'text', label: "SCORE J2", value: this.scores[this.p2].toString() }
-            ],
-            buttons: [] // Liste vide = Pas de bouton à l'écran
-        };
-        this.io.to(this.roomId).emit('renderUI', uiClean);
-
-        // Préparation du message
-        const p1Score = this.scores[this.p1];
-        const p2Score = this.scores[this.p2];
-        const roundMsg = `${reason}\nScore : ${p1Score} - ${p2Score}`;
+        const roundMsg = `${reason}\nScore : ${this.scores[this.p1]} - ${this.scores[this.p2]}`;
 
         if (this.scores[winnerId] >= 3) {
-            // Victoire finale
             this.finishGame(winnerId);
         } else {
-            // Manche suivante
             this.io.to(this.roomId).emit('modal', {
                 title: "MANCHE TERMINÉE",
                 message: roundMsg,
-                btnText: "..." // Le bouton est là pour la déco, ça va changer tout seul
+                btnText: "..." 
             });
 
             setTimeout(() => {
-                // 2. MODIFICATION ICI : On ferme juste la modale, sans afficher de texte "GO"
                 this.io.to(this.roomId).emit('modal', { close: true }); 
-                
-                // Et on relance immédiatement
                 this.startNewRound();
             }, 3000);
         }
     }
 
-
     private finishGame(winnerId: string) {
-        const p1Name = (winnerId === this.p1) ? "J1" : "J2";
-        
+        const name = (winnerId === this.p1) ? "J1" : "J2";
         this.io.to(this.roomId).emit('modal', {
             title: "VICTOIRE FINALE !",
-            message: `Le ${p1Name} remporte le duel (Score: ${this.scores[this.p1]}-${this.scores[this.p2]})`,
-            btnText: "RETOUR AU HUB"
+            message: `${name} est le plus rapide de l'Ouest !`,
+            btnText: "RETOUR"
         });
 
-        if (this.onEnd) {
-            this.onEnd(winnerId);
-            this.onEnd = null;
+        if (this.onEnd) this.onEnd(winnerId);
+    }
+
+    private updateUI() {
+        if (!this.gameStarted) {
+            this.sendRulesUI(this.p1);
+            this.sendRulesUI(this.p2);
+        } else {
+            this.sendPlayerGameUI(this.p1);
+            this.sendPlayerGameUI(this.p2);
         }
     }
 
-    private broadcastUI(status: string, color: string, btnLabel: string) {
+    private sendRulesUI(targetId: string) {
+        const isReady = this.readyStatus[targetId];
+        const otherReady = this.readyStatus[targetId === this.p1 ? this.p2 : this.p1];
+
+        const ui: UIState = {
+            title: "🤠 COWBOY",
+            status: "OBJECTIF : 3 VICTOIRES\n\n" +
+                    "1. Attends que le bouton devienne VERT.\n" +
+                    "2. Dès que tu vois 'PAN !', clique le plus vite possible.\n" +
+                    "3. ATTENTION : Si tu tires quand le bouton est ORANGE, tu perds la manche !\n\n" +
+                    (otherReady ? "✅ L'adversaire est prêt !" : "⏳ L'adversaire lit les règles..."),
+            displays: [],
+            buttons: [
+                {
+                    label: isReady ? "EN POSITION..." : "DÉGAINER ! 👍",
+                    actionId: "READY_PLAYER",
+                    color: isReady ? "grey" : "green",
+                    disabled: isReady
+                }
+            ]
+        };
+        this.io.to(targetId).emit('renderUI', ui);
+    }
+
+    private sendPlayerGameUI(targetId: string) {
+        let status = "ATTENDEZ... ✋";
+        let color = "orange";
+        let btnLabel = "PAS ENCORE !";
+
+        if (this.gameState === 'GO') {
+            status = "TIREZ !!! 🔥";
+            color = "green";
+            btnLabel = "PAN !";
+        } else if (this.gameState === 'ROUND_OVER') {
+            status = "RÉSULTAT...";
+            color = "grey";
+            btnLabel = "...";
+        }
+
         const ui: UIState = {
             title: `🤠 MANCHE ${this.scores[this.p1] + this.scores[this.p2] + 1}`,
             status: status,
             displays: [
-                { type: 'text', label: "SCORE J1", value: this.scores[this.p1].toString() },
-                { type: 'text', label: "SCORE J2", value: this.scores[this.p2].toString() }
+                { type: 'text', label: "MOI", value: this.scores[targetId].toString() },
+                { type: 'text', label: "RIVAL", value: this.scores[targetId === this.p1 ? this.p2 : this.p1].toString() }
             ],
-            buttons: [
-                { 
-                    label: btnLabel, 
-                    actionId: "SHOOT", 
-                    color: color,
-                    disabled: false,
-                    size: 'giant' // <--- C'EST ÇA QUI FAIT LE GROS BOUTON
-                }
-            ]
+            buttons: this.gameState !== 'ROUND_OVER' ? [
+                { label: btnLabel, actionId: "SHOOT", color: color, disabled: false, size: 'giant' }
+            ] : []
         };
-        this.io.to(this.roomId).emit('renderUI', ui);
+        this.io.to(targetId).emit('renderUI', ui);
+    }
+
+    refresh(playerId: string) { this.updateUI(); }
+
+    updatePlayerSocket(oldId: string, newId: string) {
+        if (this.p1 === oldId) this.p1 = newId;
+        if (this.p2 === oldId) this.p2 = newId;
+        if (this.readyStatus[oldId] !== undefined) {
+            this.readyStatus[newId] = this.readyStatus[oldId];
+            delete this.readyStatus[oldId];
+        }
+        if (this.scores[oldId] !== undefined) {
+            this.scores[newId] = this.scores[oldId];
+            delete this.scores[oldId];
+        }
     }
 
     handleDisconnect(playerId: string) {

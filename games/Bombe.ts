@@ -8,12 +8,15 @@ export class BombeGame implements GameInstance {
     private p2: string;
     private onEnd: OnGameEndCallback | null = null;
 
-    // État du jeu
-    private bombHolder: string = ""; 
-    private explostionTimer: NodeJS.Timeout | null = null;
-    private unlockButtonTimer: NodeJS.Timeout | null = null;
+    // --- ÉTATS DE SYNCHRONISATION ---
+    private readyStatus: { [key: string]: boolean } = {};
+    private gameStarted: boolean = false;
 
-    // Scores (J1 vs J2)
+    // --- ÉTAT DU JEU ---
+    private bombHolder: string = ""; 
+    private explosionTimer: NodeJS.Timeout | null = null;
+    private unlockButtonTimer: NodeJS.Timeout | null = null;
+    private isButtonLocked: boolean = false; 
     private scores: { [key: string]: number } = {};
 
     constructor(io: Server, roomId: string, p1Id: string, p2Id: string) {
@@ -21,48 +24,64 @@ export class BombeGame implements GameInstance {
         this.roomId = roomId;
         this.p1 = p1Id;
         this.p2 = p2Id;
-        // Initialisation des scores
         this.scores[p1Id] = 0;
         this.scores[p2Id] = 0;
+
+        this.readyStatus[p1Id] = false;
+        this.readyStatus[p2Id] = false;
     }
 
     start(onEnd: OnGameEndCallback) {
         this.onEnd = onEnd;
-        this.startNewRound();
-    }
-
-    private startNewRound() {
-        // La bombe commence aléatoirement chez l'un des deux à chaque manche
-        this.bombHolder = (Math.random() > 0.5) ? this.p1 : this.p2;
-
-        // Durée secrète (entre 10 et 20 secondes)
-        const duration = Math.floor(Math.random() * 10000) + 10000;
-
-        this.explostionTimer = setTimeout(() => {
-            this.explode();
-        }, duration);
-
-        // On lance l'interface (avec le délai de blocage de 2s au début)
-        this.updateInterface(true);
+        this.updateUI(); // Affiche les règles
     }
 
     handleAction(playerId: string, actionId: string) {
-        // Sécurité : Si ce n'est pas celui qui a la bombe, on ignore
-        if (playerId !== this.bombHolder) return;
+        // --- GESTION DU READY ---
+        if (actionId === 'QUIT_GAME') {
+        if (this.explosionTimer) clearTimeout(this.explosionTimer); // STOPPE L'EXPLOSION
+        if (this.unlockButtonTimer) clearTimeout(this.unlockButtonTimer);
+        const winner = (playerId === this.p1) ? this.p2 : this.p1;
+        this.io.to(this.roomId).emit('modal', { title: "ABANDON", message: "Bombe désamorcée", btnText: "OK" });
+        if (this.onEnd) this.onEnd(winner);
+        return;
+    }
 
+        if (actionId === 'READY_PLAYER') {
+            this.readyStatus[playerId] = true;
+            this.updateUI();
+
+            if (this.readyStatus[this.p1] && this.readyStatus[this.p2]) {
+                setTimeout(() => {
+                    this.gameStarted = true;
+                    this.startNewRound(); // On lance le timer de la bombe ICI
+                }, 800);
+            }
+            return;
+        }
+
+        if (!this.gameStarted) return;
+
+        if (playerId !== this.bombHolder) return;
         if (actionId === 'PASS') {
             this.switchHolder();
         }
     }
 
+    private startNewRound() {
+        this.bombHolder = (Math.random() > 0.5) ? this.p1 : this.p2;
+        const duration = Math.floor(Math.random() * 10000) + 10000; 
+
+        this.explosionTimer = setTimeout(() => {
+            this.explode();
+        }, duration);
+
+        this.updateInterface(true);
+    }
+
     private switchHolder() {
-        // Si le joueur précédent avait encore un timer de blocage en cours (bug rare), on le coupe
         if (this.unlockButtonTimer) clearTimeout(this.unlockButtonTimer);
-
-        // On passe la bombe à l'autre
         this.bombHolder = (this.bombHolder === this.p1) ? this.p2 : this.p1;
-
-        // Mise à jour de l'interface (avec blocage pour le nouveau)
         this.updateInterface(true);
     }
 
@@ -70,25 +89,56 @@ export class BombeGame implements GameInstance {
         const holderId = this.bombHolder;
         const otherId = (holderId === this.p1) ? this.p2 : this.p1;
 
-        // UI pour celui qui est SAFE
         this.sendSafeUI(otherId);
 
-        // UI pour celui qui a la BOMBE
-        if (withCooldown) {
-            // PHASE 1 : BLOQUÉ (Gros bouton rouge GRISÉ)
-            this.sendBombUI(holderId, true);
+        this.isButtonLocked = withCooldown;
+        this.sendBombUI(holderId, withCooldown);
 
-            // Dans 2 secondes, on débloque
+        if (withCooldown) {
             this.unlockButtonTimer = setTimeout(() => {
+                this.isButtonLocked = false;
                 this.sendBombUI(holderId, false); 
             }, 2000); 
-        } else {
-            // PHASE 2 : ACTIF
-            this.sendBombUI(holderId, false);
         }
     }
 
-    // Affiche les scores en haut de l'écran
+    private updateUI() {
+        if (!this.gameStarted) {
+            this.sendRulesUI(this.p1);
+            this.sendRulesUI(this.p2);
+        } else {
+            const holderId = this.bombHolder;
+            const otherId = (holderId === this.p1) ? this.p2 : this.p1;
+            this.sendSafeUI(otherId);
+            this.sendBombUI(holderId, this.isButtonLocked);
+        }
+    }
+
+    private sendRulesUI(targetId: string) {
+        const isReady = this.readyStatus[targetId];
+        const otherReady = this.readyStatus[targetId === this.p1 ? this.p2 : this.p1];
+
+        const ui: UIState = {
+            title: "💣 LA BOMBE",
+            status: "OBJECTIF : NE PAS EXPLOSER\n\n" +
+                    "1. La bombe est confiée à l'un de vous au hasard.\n" +
+                    "2. Clique vite pour la PASSER à ton adversaire.\n" +
+                    "3. Attention : quand tu la reçois, elle est BLOQUÉE 2s.\n" +
+                    "4. Celui qui a la bombe à l'explosion perd la manche.\n\n" +
+                    (otherReady ? "✅ L'adversaire est prêt !" : "⏳ L'adversaire lit les règles..."),
+            displays: [],
+            buttons: [
+                {
+                    label: isReady ? "ATTENTE..." : "J'AI COMPRIS ! 👍",
+                    actionId: "READY_PLAYER",
+                    color: isReady ? "grey" : "green",
+                    disabled: isReady
+                }
+            ]
+        };
+        this.io.to(targetId).emit('renderUI', ui);
+    }
+
     private getScoreDisplays() {
         return [
             { type: 'text', label: "SCORE J1", value: this.scores[this.p1].toString() },
@@ -97,34 +147,27 @@ export class BombeGame implements GameInstance {
     }
 
     private sendSafeUI(playerId: string) {
-        // Astuce : any pour éviter les erreurs de type strict sur 'text' si besoin
-        const displays: any[] = this.getScoreDisplays();
-        displays.push({ type: 'text', label: "STATUS", value: "SAFE 😅" });
-
         const ui: UIState = {
             title: `💣 MANCHE ${this.getTotalRounds()}`,
-            status: "L'ennemi a la bombe ! Priez...",
-            displays: displays,
-            buttons: [] // Pas de bouton
+            status: "L'ennemi a la bombe ! Priez... 🙏",
+            displays: this.getScoreDisplays(),
+            buttons: [] 
         };
         this.io.to(playerId).emit('renderUI', ui);
     }
 
     private sendBombUI(playerId: string, disabled: boolean) {
-        const displays: any[] = this.getScoreDisplays();
-        displays.push({ type: 'text', label: "STATUS", value: "DANGER 💀" });
-
         const ui: UIState = {
             title: `💣 MANCHE ${this.getTotalRounds()}`,
-            status: disabled ? "BOMBE BLOQUÉE (2s)..." : "PASSE LA VITE !!!",
-            displays: displays,
+            status: disabled ? "BOMBE BLOQUÉE (2s)... ⏳" : "PASSE LA VITE !!! 🔥",
+            displays: this.getScoreDisplays(),
             buttons: [
                 {
                     label: disabled ? "..." : "PASSER LA BOMBE 🎁",
                     actionId: "PASS",
                     color: "red",
                     disabled: disabled,
-                    size: 'giant' // Le fameux gros bouton
+                    size: 'giant'
                 }
             ]
         };
@@ -132,42 +175,32 @@ export class BombeGame implements GameInstance {
     }
 
     private getTotalRounds() {
-        return this.scores[this.p1] + this.scores[this.p2] + 1;
+        return (this.scores[this.p1] || 0) + (this.scores[this.p2] || 0) + 1;
     }
 
     private explode() {
         if (this.unlockButtonTimer) clearTimeout(this.unlockButtonTimer);
-
-        // Celui qui a la bombe a perdu la manche
         const loser = this.bombHolder;
         const winner = (loser === this.p1) ? this.p2 : this.p1;
-        
-        // Point pour le survivant
         this.scores[winner]++;
 
-        // 1. NETTOYAGE ÉCRAN (On enlève le bouton pour voir l'explosion)
-        const uiClean: UIState = {
+        this.io.to(this.roomId).emit('renderUI', {
             title: "BOUM !", 
             status: "La bombe a explosé...",
             displays: this.getScoreDisplays(),
             buttons: []
-        };
-        this.io.to(this.roomId).emit('renderUI', uiClean);
+        });
 
-        // Vérification victoire (Premier à 3 points)
         if (this.scores[winner] >= 3) {
             this.finishGame(winner);
         } else {
-            // Manche suivante
             const winnerName = (winner === this.p1) ? "J1" : "J2";
             this.io.to(this.roomId).emit('modal', {
                 title: "EXPLOSION !",
-                message: `Point pour ${winnerName}.\nPréparez-vous pour la suite...`,
+                message: `Point pour ${winnerName}.`,
                 btnText: "..."
             });
-
             setTimeout(() => {
-                // On ferme la modale et on relance
                 this.io.to(this.roomId).emit('modal', { close: true });
                 this.startNewRound();
             }, 3000);
@@ -178,14 +211,32 @@ export class BombeGame implements GameInstance {
         const p1Name = (winnerId === this.p1) ? "J1" : "J2";
         this.io.to(this.roomId).emit('modal', {
             title: "VICTOIRE FINALE",
-            message: `${p1Name} a survécu à la guerre !\nScore final: ${this.scores[this.p1]}-${this.scores[this.p2]}`,
-            btnText: "RETOUR AU HUB"
+            message: `${p1Name} l'emporte !`,
+            btnText: "RETOUR"
         });
         if (this.onEnd) this.onEnd(winnerId);
     }
     
+    refresh(playerId: string) {
+        this.updateUI();
+    }
+
+    updatePlayerSocket(oldId: string, newId: string) {
+        if (this.p1 === oldId) this.p1 = newId;
+        if (this.p2 === oldId) this.p2 = newId;
+        if (this.bombHolder === oldId) this.bombHolder = newId;
+        if (this.readyStatus[oldId] !== undefined) {
+            this.readyStatus[newId] = this.readyStatus[oldId];
+            delete this.readyStatus[oldId];
+        }
+        if (this.scores[oldId] !== undefined) {
+            this.scores[newId] = this.scores[oldId];
+            delete this.scores[oldId];
+        }
+    }
+
     handleDisconnect(playerId: string) {
-        if (this.explostionTimer) clearTimeout(this.explostionTimer);
+        if (this.explosionTimer) clearTimeout(this.explosionTimer);
         if (this.unlockButtonTimer) clearTimeout(this.unlockButtonTimer);
         const winner = (playerId === this.p1) ? this.p2 : this.p1;
         if (this.onEnd) this.onEnd(winner);

@@ -5,12 +5,14 @@ import { DuelGame } from './Duel';
 import { CowboyGame } from './Cowboy';
 import { BombeGame } from './Bombe';
 import { ChronoGame } from './Chrono';
+import { MineGame } from './Mine';
 
 const AVAILABLE_GAMES = [
     { id: 'DUEL', label: '⚔️ DUEL', color: 'blue' },
     { id: 'COWBOY', label: '🤠 COWBOY', color: 'orange' },
     { id: 'BOMBE', label: '💣 BOMBE', color: 'red' },
-    { id: 'CHRONO', label: '⏱️ CHRONO', color: 'purple' }
+    { id: 'CHRONO', label: '⏱️ CHRONO', color: 'purple' },
+    { id: 'MINE', label: '💎 MINE', color: 'green' }
 ];
 
 export class Session implements GameInstance {
@@ -18,8 +20,7 @@ export class Session implements GameInstance {
     private roomId: string;
     private p1: string;
     private p2: string;
-    private onSessionEnd: OnGameEndCallback | null = null; // Callback pour le serveur
-
+    private onSessionEnd: OnGameEndCallback | null = null;
     private scores = { p1: 0, p2: 0 };
     private votes: { p1: string | null, p2: string | null } = { p1: null, p2: null };
     private currentGame: GameInstance | null = null;
@@ -31,10 +32,31 @@ export class Session implements GameInstance {
         this.p2 = p2;
     }
 
-    // Le serveur passe une fonction ici pour savoir quand la session ferme
     start(onEnd: OnGameEndCallback) {
         this.onSessionEnd = onEnd;
         this.sendHubUI();
+    }
+
+    // --- LE CORRECTIF EST ICI ---
+    updatePlayerSocket(oldId: string, newId: string) {
+        // On met à jour l'ID dans la Session
+        if (this.p1 === oldId) this.p1 = newId;
+        if (this.p2 === oldId) this.p2 = newId;
+
+        // Et on le dit aussi au jeu en cours !
+        if (this.currentGame) {
+            this.currentGame.updatePlayerSocket(oldId, newId);
+        }
+    }
+
+    refresh(playerId: string) {
+        if (this.currentGame) {
+            this.currentGame.refresh(playerId);
+        } else {
+            // Le playerId est maintenant à jour, donc cette condition va marcher !
+            if (playerId === this.p1) this.sendToPlayer(this.p1, this.scores.p1, this.scores.p2);
+            else if (playerId === this.p2) this.sendToPlayer(this.p2, this.scores.p2, this.scores.p1);
+        }
     }
 
     handleAction(playerId: string, actionId: string) {
@@ -42,24 +64,15 @@ export class Session implements GameInstance {
             this.currentGame.handleAction(playerId, actionId);
             return;
         }
-
-        // --- NOUVEAU : QUITTER LA SESSION ---
         if (actionId === 'SESSION_EXIT') {
-            console.log(`[SESSION] ${playerId} souhaite quitter.`);
-            if (this.onSessionEnd) {
-                this.onSessionEnd(null); // On prévient le serveur (null = pas de vainqueur global)
-                this.onSessionEnd = null;
-            }
+            if (this.onSessionEnd) { this.onSessionEnd(null); this.onSessionEnd = null; }
             return;
         }
-
         if (actionId.startsWith('VOTE_')) {
             const vote = actionId.replace('VOTE_', '');
             if (playerId === this.p1) this.votes.p1 = vote;
             else if (playerId === this.p2) this.votes.p2 = vote;
-
             this.sendHubUI();
-
             if (this.votes.p1 !== null && this.votes.p2 !== null) {
                 setTimeout(() => this.resolveVotesAndLaunch(), 500);
             }
@@ -73,18 +86,15 @@ export class Session implements GameInstance {
             if (choice1 === 'RANDOM') choice1 = this.pickRandomGameId();
             if (choice2 === 'RANDOM') choice2 = this.pickRandomGameId();
             const finalChoice = (Math.random() > 0.5) ? choice1 : choice2;
-            
-            this.votes.p1 = null;
-            this.votes.p2 = null;
+            this.votes.p1 = null; this.votes.p2 = null;
 
             if (finalChoice === 'DUEL') this.currentGame = new DuelGame(this.io, this.roomId, this.p1, this.p2);
             else if (finalChoice === 'COWBOY') this.currentGame = new CowboyGame(this.io, this.roomId, this.p1, this.p2);
             else if (finalChoice === 'BOMBE') this.currentGame = new BombeGame(this.io, this.roomId, this.p1, this.p2);
             else if (finalChoice === 'CHRONO') this.currentGame = new ChronoGame(this.io, this.roomId, this.p1, this.p2);
+            else if (finalChoice === 'MINE') this.currentGame = new MineGame(this.io, this.roomId, this.p1, this.p2);
 
-            if (this.currentGame) {
-                this.currentGame.start((winnerId) => this.handleGameEnd(winnerId));
-            }
+            if (this.currentGame) this.currentGame.start((winnerId) => this.handleGameEnd(winnerId));
         } catch (e) { console.error(e); }
     }
 
@@ -95,14 +105,8 @@ export class Session implements GameInstance {
 
     private handleGameEnd(winnerId: string | null) {
         this.currentGame = null;
-        if (winnerId === this.p1) this.scores.p1++;
-        else if (winnerId === this.p2) this.scores.p2++;
-
-        this.io.to(this.roomId).emit('modal', {
-            title: "FIN DU MATCH",
-            message: "Retour au menu de vote",
-            btnText: "OK"
-        });
+        if (winnerId === this.p1) this.scores.p1++; else if (winnerId === this.p2) this.scores.p2++;
+        this.io.to(this.roomId).emit('modal', { title: "FIN DU MATCH", message: "Retour au vote", btnText: "OK" });
         this.sendHubUI();
     }
 
@@ -114,48 +118,21 @@ export class Session implements GameInstance {
     private sendToPlayer(targetId: string, myScore: number, opScore: number) {
         const myVote = (targetId === this.p1) ? this.votes.p1 : this.votes.p2;
         const opVote = (targetId === this.p1) ? this.votes.p2 : this.votes.p1;
-
         let statusMsg = "Votez pour le prochain jeu !";
         if (myVote && opVote) statusMsg = "Lancement...";
-        else if (myVote && !opVote) statusMsg = "Attente de l'adversaire...";
-        else if (!myVote && opVote) statusMsg = "L'adversaire a voté ! À toi !";
+        else if (myVote && !opVote) statusMsg = "Attente adversaire...";
+        else if (!myVote && opVote) statusMsg = "L'adversaire a voté !";
 
         const buttons = AVAILABLE_GAMES.map(game => ({
-            label: game.label,
-            actionId: `VOTE_${game.id}`,
-            color: (myVote === game.id) ? 'green' : game.color,
-            disabled: (myVote !== null)
+            label: game.label, actionId: `VOTE_${game.id}`, color: (myVote === game.id) ? 'green' : game.color, disabled: (myVote !== null)
         }));
+        buttons.push({ label: "🎲 ALÉATOIRE", actionId: "VOTE_RANDOM", color: (myVote === 'RANDOM') ? 'green' : 'grey', disabled: (myVote !== null) });
+        buttons.push({ label: "🚪 QUITTER", actionId: "SESSION_EXIT", color: "red", disabled: false });
 
-        buttons.push({
-            label: "🎲 ALÉATOIRE",
-            actionId: "VOTE_RANDOM",
-            color: (myVote === 'RANDOM') ? 'green' : 'grey',
-            disabled: (myVote !== null)
+        this.io.to(targetId).emit('renderUI', {
+            title: "VOTE", status: statusMsg, displays: [{ type: 'text', label: "MOI", value: myScore.toString() }, { type: 'text', label: "RIVAL", value: opScore.toString() }], buttons: buttons
         });
-
-        // --- AJOUT DU BOUTON QUITTER ---
-        buttons.push({
-            label: "🚪 QUITTER LA SESSION",
-            actionId: "SESSION_EXIT",
-            color: "red",
-            disabled: false
-        });
-
-        const ui: UIState = {
-            title: "VOTE",
-            status: statusMsg,
-            displays: [
-                { type: 'text', label: "MOI", value: myScore.toString() },
-                { type: 'text', label: "RIVAL", value: opScore.toString() }
-            ],
-            buttons: buttons
-        };
-        this.io.to(targetId).emit('renderUI', ui);
     }
 
-    handleDisconnect(playerId: string) {
-        if (this.currentGame) this.currentGame.handleDisconnect(playerId);
-        // Note: On laisse le serveur gérer la fermeture de session ici
-    }
+    handleDisconnect(playerId: string) { if (this.currentGame) this.currentGame.handleDisconnect(playerId); }
 }

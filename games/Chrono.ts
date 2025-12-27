@@ -8,14 +8,15 @@ export class ChronoGame implements GameInstance {
     private p2: string;
     private onEnd: OnGameEndCallback | null = null;
 
-    // Scores
+    // --- ÉTATS DE SYNCHRONISATION ---
+    private readyStatus: { [key: string]: boolean } = {};
+    private gameStarted: boolean = false;
+
+    // --- ÉTAT DU JEU ---
     private scores: { [key: string]: number } = {};
-    
-    // État de la manche
-    private targetTime: number = 0; // La cible (ex: 12500 ms)
-    private startTime: number = 0;  // Quand le chrono a démarré
-    private playerTimes: { [key: string]: number | null } = {}; // Temps arrêtés par les joueurs
-    
+    private targetTime: number = 0; 
+    private startTime: number = 0;  
+    private playerTimes: { [key: string]: number | null } = {}; 
     private tickInterval: NodeJS.Timeout | null = null;
 
     constructor(io: Server, roomId: string, p1Id: string, p2Id: string) {
@@ -25,27 +26,67 @@ export class ChronoGame implements GameInstance {
         this.p2 = p2Id;
         this.scores[p1Id] = 0;
         this.scores[p2Id] = 0;
+
+        this.readyStatus[p1Id] = false;
+        this.readyStatus[p2Id] = false;
     }
 
     start(onEnd: OnGameEndCallback) {
         this.onEnd = onEnd;
-        this.startNewRound();
+        this.updateUI(); // Affiche l'écran des règles
+    }
+
+    handleAction(playerId: string, actionId: string) {
+      
+        if (actionId === 'QUIT_GAME') {
+        if (this.tickInterval) clearInterval(this.tickInterval); // STOPPE LE CHRONO
+        const winner = (playerId === this.p1) ? this.p2 : this.p1;
+        this.io.to(this.roomId).emit('modal', { title: "ABANDON", message: "Temps arrêté", btnText: "OK" });
+        if (this.onEnd) this.onEnd(winner);
+        return;
+    }
+
+        // --- GESTION DU READY ---
+        if (actionId === 'READY_PLAYER') {
+            this.readyStatus[playerId] = true;
+            this.updateUI();
+
+            if (this.readyStatus[this.p1] && this.readyStatus[this.p2]) {
+                setTimeout(() => {
+                    this.gameStarted = true;
+                    this.startNewRound(); // On lance la première manche
+                }, 800);
+            }
+            return;
+        }
+
+        if (!this.gameStarted) return;
+
+        // Logique de jeu (Bouton STOP)
+        if (actionId === 'STOP') {
+            if (this.playerTimes[playerId]) return;
+
+            const duration = (Date.now() - this.startTime) / 1000;
+            this.playerTimes[playerId] = duration;
+
+            this.updateUI();
+
+            if (this.playerTimes[this.p1] && this.playerTimes[this.p2]) {
+                this.resolveRound();
+            }
+        }
     }
 
     private startNewRound() {
-        // 1. Reset des variables de manche
-        this.playerTimes[this.p1] = null;
-        this.playerTimes[this.p2] = null;
+        this.playerTimes = { [this.p1]: null, [this.p2]: null };
 
-        // 2. Définir une cible aléatoire entre 10 et 20 secondes (ex: 14.5s)
-        // On arrondit à 1 décimale pour que ce soit joli
+        // Cible aléatoire entre 10 et 20s
         const randomSec = (Math.random() * 10) + 10; 
-        this.targetTime = Math.round(randomSec * 10) / 10; // ex: 14.2
+        this.targetTime = Math.round(randomSec * 10) / 10;
 
-        // 3. Annonce de la cible
-        this.broadcastUI(`CIBLE : ${this.targetTime.toFixed(1)} SECONDES`, "PRÉPAREZ-VOUS...", true);
+        // Phase de préparation (3s)
+        this.broadcastGameUI(`CIBLE : ${this.targetTime.toFixed(1)}s`, "PRÉPAREZ-VOUS...", true);
 
-        // 4. Démarrage après 3 secondes
         setTimeout(() => {
             this.beginTimer();
         }, 3000);
@@ -53,149 +94,165 @@ export class ChronoGame implements GameInstance {
 
     private beginTimer() {
         this.startTime = Date.now();
-        let secondsPassed = 0;
+        this.updateUI();
 
-        // On active le bouton STOP
-        this.broadcastUI(`CIBLE : ${this.targetTime.toFixed(1)}s`, "C'EST PARTI !", false);
-
-        // Boucle qui met à jour l'affichage chaque seconde
+        if (this.tickInterval) clearInterval(this.tickInterval);
+        
         this.tickInterval = setInterval(() => {
-            secondsPassed++;
-            const elapsed = Date.now() - this.startTime;
+            const elapsed = (Date.now() - this.startTime) / 1000;
 
-            // Si tout le monde a fini, on coupe
             if (this.playerTimes[this.p1] && this.playerTimes[this.p2]) {
                 if (this.tickInterval) clearInterval(this.tickInterval);
                 return;
             }
 
-            // Si on dépasse 5 secondes -> MODE AVEUGLE
-            if (secondsPassed >= 5) {
-                this.broadcastUI(`CIBLE : ${this.targetTime.toFixed(1)}s`, "???", false, true); // true = garde les boutons actifs
-            } else {
-                // Sinon on affiche les secondes (1s... 2s...)
-                this.broadcastUI(`CIBLE : ${this.targetTime.toFixed(1)}s`, `${secondsPassed}s...`, false, true);
-            }
+            this.updateUI();
 
-            // Sécurité : Si ça fait 30 secondes, on arrête tout (AFK)
-            if (elapsed > 30000) {
-                this.resolveRound();
-            }
-
+            // Sécurité AFK
+            if (elapsed > 30) this.resolveRound();
         }, 1000);
     }
 
-    handleAction(playerId: string, actionId: string) {
-        // Si le joueur a déjà arrêté son temps, on ignore
-        if (this.playerTimes[playerId]) return;
-
-        // On enregistre son temps
-        const duration = (Date.now() - this.startTime) / 1000; // en secondes
-        this.playerTimes[playerId] = duration;
-
-        // On désactive son bouton et on lui dit "Bien reçu"
-        this.sendPlayerUI(playerId, `Arrêté à ??? (Cible: ${this.targetTime}s)`, true);
-
-        // Si les deux ont fini, on résout la manche
-        if (this.playerTimes[this.p1] && this.playerTimes[this.p2]) {
-            this.resolveRound();
+    private updateUI() {
+        if (!this.gameStarted) {
+            this.sendRulesUI(this.p1);
+            this.sendRulesUI(this.p2);
+        } else {
+            this.sendPlayerGameUI(this.p1);
+            this.sendPlayerGameUI(this.p2);
         }
+    }
+
+    private sendRulesUI(targetId: string) {
+        const isReady = this.readyStatus[targetId];
+        const otherReady = this.readyStatus[targetId === this.p1 ? this.p2 : this.p1];
+
+        const ui: UIState = {
+            title: "⏱️ CHRONO",
+            status: "OBJECTIF : ARRÊTÉ AU PLUS PROCHE\n\n" +
+                    "1. Une cible s'affiche (ex: 14.2s).\n" +
+                    "2. Le chrono démarre : 1s, 2s, 3s...\n" +
+                    "3. APRÈS 5 SECONDES, LE CHRONO DEVIENT INVISIBLE !\n" +
+                    "4. Clique sur STOP pour valider ton temps.\n\n" +
+                    (otherReady ? "✅ L'adversaire est prêt !" : "⏳ L'adversaire lit les règles..."),
+            displays: [],
+            buttons: [
+                {
+                    label: isReady ? "ATTENTE..." : "D'ACCORD ! 👍",
+                    actionId: "READY_PLAYER",
+                    color: isReady ? "grey" : "green",
+                    disabled: isReady
+                }
+            ]
+        };
+        this.io.to(targetId).emit('renderUI', ui);
+    }
+
+    private sendPlayerGameUI(playerId: string) {
+        const elapsed = this.startTime > 0 ? (Date.now() - this.startTime) / 1000 : 0;
+        const hasPlayed = !!this.playerTimes[playerId];
+        
+        let centerText = "PRÉPARATION...";
+        if (this.startTime > 0) {
+            if (hasPlayed) {
+                centerText = "TEMPS ENREGISTRÉ 🏁";
+            } else {
+                centerText = elapsed >= 5 ? "???" : `${Math.floor(elapsed)}s...`;
+            }
+        }
+
+        const ui: UIState = {
+            title: `CIBLE : ${this.targetTime.toFixed(1)}s`,
+            status: centerText,
+            displays: [
+                { type: 'text', label: "MOI", value: this.scores[playerId].toString() },
+                { type: 'text', label: "RIVAL", value: this.scores[playerId === this.p1 ? this.p2 : this.p1].toString() }
+            ],
+            buttons: [
+                {
+                    label: hasPlayed ? "ATTENTE..." : "STOP 🛑",
+                    actionId: "STOP",
+                    color: hasPlayed ? "grey" : "orange",
+                    disabled: hasPlayed || this.startTime === 0,
+                    size: 'giant'
+                }
+            ]
+        };
+        this.io.to(playerId).emit('renderUI', ui);
+    }
+
+    private broadcastGameUI(title: string, status: string, disabled: boolean) {
+        [this.p1, this.p2].forEach(id => {
+            const ui: UIState = {
+                title: title,
+                status: status,
+                displays: [
+                    { type: 'text', label: "SCORE J1", value: this.scores[this.p1].toString() },
+                    { type: 'text', label: "SCORE J2", value: this.scores[this.p2].toString() }
+                ],
+                buttons: [{ label: "STOP 🛑", actionId: "STOP", color: "orange", disabled: disabled, size: 'giant' }]
+            };
+            this.io.to(id).emit('renderUI', ui);
+        });
     }
 
     private resolveRound() {
         if (this.tickInterval) clearInterval(this.tickInterval);
 
-        const t1 = this.playerTimes[this.p1] || 999; // 999 si pas joué
-        const t2 = this.playerTimes[this.p2] || 999;
-
-        // Calcul de la différence (écart)
+        const t1 = this.playerTimes[this.p1] || 99.9;
+        const t2 = this.playerTimes[this.p2] || 99.9;
         const diff1 = Math.abs(t1 - this.targetTime);
         const diff2 = Math.abs(t2 - this.targetTime);
 
-        let winnerId: string;
-        let msg = "";
+        const winnerId = diff1 < diff2 ? this.p1 : this.p2;
+        this.scores[winnerId]++;
 
-        if (diff1 < diff2) {
-            winnerId = this.p1;
-            this.scores[this.p1]++;
-        } else {
-            winnerId = this.p2;
-            this.scores[this.p2]++;
-        }
+        const msg = `Cible: ${this.targetTime}s\nJ1: ${t1.toFixed(2)}s | J2: ${t2.toFixed(2)}s`;
 
-        msg = `Cible: ${this.targetTime}s\n`;
-        msg += `J1: ${t1.toFixed(2)}s (Ecart: ${diff1.toFixed(2)})\n`;
-        msg += `J2: ${t2.toFixed(2)}s (Ecart: ${diff2.toFixed(2)})`;
-
-        // Nettoyage écran
-        this.broadcastUI("RÉSULTATS...", "", true);
-
-        // Vérification victoire finale (3 points)
         if (this.scores[winnerId] >= 3) {
             this.finishGame(winnerId, msg);
         } else {
-            // Manche suivante
-            const winnerName = (winnerId === this.p1) ? "J1" : "J2";
-            this.io.to(this.roomId).emit('modal', {
-                title: `${winnerName} GAGNE LE POINT`,
-                message: msg,
-                btnText: "..."
-            });
-
+            const name = winnerId === this.p1 ? "J1" : "J2";
+            this.io.to(this.roomId).emit('modal', { title: `POINT POUR ${name}`, message: msg, btnText: "..." });
             setTimeout(() => {
                 this.io.to(this.roomId).emit('modal', { close: true });
                 this.startNewRound();
-            }, 4000); // 4 secondes pour lire les temps
+            }, 4000);
         }
     }
 
-    private finishGame(winnerId: string, finalMsg: string) {
-        const p1Name = (winnerId === this.p1) ? "J1" : "J2";
+    private finishGame(winnerId: string, msg: string) {
+        const name = winnerId === this.p1 ? "J1" : "J2";
         this.io.to(this.roomId).emit('modal', {
-            title: "VICTOIRE FINALE",
-            message: `${p1Name} est le maître du temps !\nScore: ${this.scores[this.p1]}-${this.scores[this.p2]}`,
-            btnText: "RETOUR AU HUB"
+            title: "VICTOIRE !",
+            message: `${name} est le maître du temps !\n${msg}`,
+            btnText: "RETOUR"
         });
         if (this.onEnd) this.onEnd(winnerId);
     }
 
-    // Fonction d'affichage générique
-    private broadcastUI(title: string, centerText: string, buttonsDisabled: boolean, keepButtonsActiveIfPlayed: boolean = false) {
-        this.sendPlayerUI(this.p1, centerText, buttonsDisabled && !this.playerTimes[this.p1], title);
-        this.sendPlayerUI(this.p2, centerText, buttonsDisabled && !this.playerTimes[this.p2], title);
-    }
+    refresh(playerId: string) { this.updateUI(); }
 
-    private sendPlayerUI(playerId: string, centerText: string, disabled: boolean, customTitle?: string) {
-        const ui: UIState = {
-            title: customTitle || `⏱️ CHRONO - MANCHE ${this.scores[this.p1] + this.scores[this.p2] + 1}`,
-            status: centerText,
-            displays: [
-                { type: 'text', label: "SCORE J1", value: this.scores[this.p1].toString() },
-                { type: 'text', label: "SCORE J2", value: this.scores[this.p2].toString() }
-            ],
-            buttons: [
-                {
-                    label: "STOP 🛑",
-                    actionId: "STOP",
-                    color: "orange",
-                    disabled: disabled,
-                    size: 'giant' // On réutilise le gros bouton
-                }
-            ]
-        };
-        // Si le joueur a déjà joué, on grise son bouton pour lui montrer
-        if (this.playerTimes[playerId]) {
-            ui.buttons![0].disabled = true;
-            ui.buttons![0].color = "grey";
-            ui.buttons![0].label = "ATTENTE...";
+    updatePlayerSocket(oldId: string, newId: string) {
+        if (this.p1 === oldId) this.p1 = newId;
+        if (this.p2 === oldId) this.p2 = newId;
+        if (this.readyStatus[oldId] !== undefined) {
+            this.readyStatus[newId] = this.readyStatus[oldId];
+            delete this.readyStatus[oldId];
         }
-
-        this.io.to(playerId).emit('renderUI', ui);
+        if (this.playerTimes[oldId] !== undefined) {
+            this.playerTimes[newId] = this.playerTimes[oldId];
+            delete this.playerTimes[oldId];
+        }
+        if (this.scores[oldId] !== undefined) {
+            this.scores[newId] = this.scores[oldId];
+            delete this.scores[oldId];
+        }
     }
 
     handleDisconnect(playerId: string) {
         if (this.tickInterval) clearInterval(this.tickInterval);
-        const winner = (playerId === this.p1) ? this.p2 : this.p1;
+        const winner = playerId === this.p1 ? this.p2 : this.p1;
         if (this.onEnd) this.onEnd(winner);
     }
 }

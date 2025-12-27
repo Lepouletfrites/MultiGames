@@ -5,15 +5,17 @@ var Duel_1 = require("./Duel");
 var Cowboy_1 = require("./Cowboy");
 var Bombe_1 = require("./Bombe");
 var Chrono_1 = require("./Chrono");
+var Mine_1 = require("./Mine");
 var AVAILABLE_GAMES = [
     { id: 'DUEL', label: '⚔️ DUEL', color: 'blue' },
     { id: 'COWBOY', label: '🤠 COWBOY', color: 'orange' },
     { id: 'BOMBE', label: '💣 BOMBE', color: 'red' },
-    { id: 'CHRONO', label: '⏱️ CHRONO', color: 'purple' }
+    { id: 'CHRONO', label: '⏱️ CHRONO', color: 'purple' },
+    { id: 'MINE', label: '💎 MINE', color: 'green' }
 ];
 var Session = /** @class */ (function () {
     function Session(io, roomId, p1, p2) {
-        this.onSessionEnd = null; // Callback pour le serveur
+        this.onSessionEnd = null;
         this.scores = { p1: 0, p2: 0 };
         this.votes = { p1: null, p2: null };
         this.currentGame = null;
@@ -22,10 +24,33 @@ var Session = /** @class */ (function () {
         this.p1 = p1;
         this.p2 = p2;
     }
-    // Le serveur passe une fonction ici pour savoir quand la session ferme
     Session.prototype.start = function (onEnd) {
         this.onSessionEnd = onEnd;
         this.sendHubUI();
+    };
+    // --- LE CORRECTIF EST ICI ---
+    Session.prototype.updatePlayerSocket = function (oldId, newId) {
+        // On met à jour l'ID dans la Session
+        if (this.p1 === oldId)
+            this.p1 = newId;
+        if (this.p2 === oldId)
+            this.p2 = newId;
+        // Et on le dit aussi au jeu en cours !
+        if (this.currentGame) {
+            this.currentGame.updatePlayerSocket(oldId, newId);
+        }
+    };
+    Session.prototype.refresh = function (playerId) {
+        if (this.currentGame) {
+            this.currentGame.refresh(playerId);
+        }
+        else {
+            // Le playerId est maintenant à jour, donc cette condition va marcher !
+            if (playerId === this.p1)
+                this.sendToPlayer(this.p1, this.scores.p1, this.scores.p2);
+            else if (playerId === this.p2)
+                this.sendToPlayer(this.p2, this.scores.p2, this.scores.p1);
+        }
     };
     Session.prototype.handleAction = function (playerId, actionId) {
         var _this = this;
@@ -33,11 +58,9 @@ var Session = /** @class */ (function () {
             this.currentGame.handleAction(playerId, actionId);
             return;
         }
-        // --- NOUVEAU : QUITTER LA SESSION ---
         if (actionId === 'SESSION_EXIT') {
-            console.log("[SESSION] ".concat(playerId, " souhaite quitter."));
             if (this.onSessionEnd) {
-                this.onSessionEnd(null); // On prévient le serveur (null = pas de vainqueur global)
+                this.onSessionEnd(null);
                 this.onSessionEnd = null;
             }
             return;
@@ -74,9 +97,10 @@ var Session = /** @class */ (function () {
                 this.currentGame = new Bombe_1.BombeGame(this.io, this.roomId, this.p1, this.p2);
             else if (finalChoice === 'CHRONO')
                 this.currentGame = new Chrono_1.ChronoGame(this.io, this.roomId, this.p1, this.p2);
-            if (this.currentGame) {
+            else if (finalChoice === 'MINE')
+                this.currentGame = new Mine_1.MineGame(this.io, this.roomId, this.p1, this.p2);
+            if (this.currentGame)
                 this.currentGame.start(function (winnerId) { return _this.handleGameEnd(winnerId); });
-            }
         }
         catch (e) {
             console.error(e);
@@ -92,11 +116,7 @@ var Session = /** @class */ (function () {
             this.scores.p1++;
         else if (winnerId === this.p2)
             this.scores.p2++;
-        this.io.to(this.roomId).emit('modal', {
-            title: "FIN DU MATCH",
-            message: "Retour au menu de vote",
-            btnText: "OK"
-        });
+        this.io.to(this.roomId).emit('modal', { title: "FIN DU MATCH", message: "Retour au vote", btnText: "OK" });
         this.sendHubUI();
     };
     Session.prototype.sendHubUI = function () {
@@ -110,44 +130,20 @@ var Session = /** @class */ (function () {
         if (myVote && opVote)
             statusMsg = "Lancement...";
         else if (myVote && !opVote)
-            statusMsg = "Attente de l'adversaire...";
+            statusMsg = "Attente adversaire...";
         else if (!myVote && opVote)
-            statusMsg = "L'adversaire a voté ! À toi !";
+            statusMsg = "L'adversaire a voté !";
         var buttons = AVAILABLE_GAMES.map(function (game) { return ({
-            label: game.label,
-            actionId: "VOTE_".concat(game.id),
-            color: (myVote === game.id) ? 'green' : game.color,
-            disabled: (myVote !== null)
+            label: game.label, actionId: "VOTE_".concat(game.id), color: (myVote === game.id) ? 'green' : game.color, disabled: (myVote !== null)
         }); });
-        buttons.push({
-            label: "🎲 ALÉATOIRE",
-            actionId: "VOTE_RANDOM",
-            color: (myVote === 'RANDOM') ? 'green' : 'grey',
-            disabled: (myVote !== null)
+        buttons.push({ label: "🎲 ALÉATOIRE", actionId: "VOTE_RANDOM", color: (myVote === 'RANDOM') ? 'green' : 'grey', disabled: (myVote !== null) });
+        buttons.push({ label: "🚪 QUITTER", actionId: "SESSION_EXIT", color: "red", disabled: false });
+        this.io.to(targetId).emit('renderUI', {
+            title: "VOTE", status: statusMsg, displays: [{ type: 'text', label: "MOI", value: myScore.toString() }, { type: 'text', label: "RIVAL", value: opScore.toString() }], buttons: buttons
         });
-        // --- AJOUT DU BOUTON QUITTER ---
-        buttons.push({
-            label: "🚪 QUITTER LA SESSION",
-            actionId: "SESSION_EXIT",
-            color: "red",
-            disabled: false
-        });
-        var ui = {
-            title: "VOTE",
-            status: statusMsg,
-            displays: [
-                { type: 'text', label: "MOI", value: myScore.toString() },
-                { type: 'text', label: "RIVAL", value: opScore.toString() }
-            ],
-            buttons: buttons
-        };
-        this.io.to(targetId).emit('renderUI', ui);
     };
-    Session.prototype.handleDisconnect = function (playerId) {
-        if (this.currentGame)
-            this.currentGame.handleDisconnect(playerId);
-        // Note: On laisse le serveur gérer la fermeture de session ici
-    };
+    Session.prototype.handleDisconnect = function (playerId) { if (this.currentGame)
+        this.currentGame.handleDisconnect(playerId); };
     return Session;
 }());
 exports.Session = Session;
