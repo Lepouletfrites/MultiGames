@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Multi-Jeux</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <h1 id="game-title">En attente...</h1>
+
+    <h3 id="game-status" style="color:#aaa;">Recherche d'adversaire...</h3>
+
+    <div id="game-area" class="stats-container"></div>
+
+    <div id="controls-area" class="controls"></div>
+
+    <div id="result-modal" class="modal">
+        <div class="modal-content">
+            <h2 id="modal-title" style="color:#f1c40f">INFO</h2>
+            <p id="modal-text" class="modal-result">...</p>
+            <button id="btn-modal-action" onclick="closeModal()">OK</button>
+        </div>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="game.js"></script>
+</body>
+</html>
